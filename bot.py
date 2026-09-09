@@ -41,7 +41,7 @@ async def on_voice_state_update(member, before, after):
     if member == bot.user and before.channel is not None and after.channel is None:
         guild = before.channel.guild
         
-        # Сбрасываем зависшее голосовое подключение
+        # Сбрасываем зависшее подключение
         if guild.voice_client:
             try:
                 await guild.voice_client.disconnect(force=True)
@@ -49,23 +49,25 @@ async def on_voice_state_update(member, before, after):
                 pass
 
         kicker_name = None
+        error_reason = None
         
-        # Быстрый поиск в аудите (5 попыток каждые 0.3 сек без лишних задержек)
-        for _ in range(5):
-            await asyncio.sleep(0.3)
-            try:
-                async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.member_disconnect):
-                    now = discord.utils.utcnow()
-                    time_diff = abs((now - entry.created_at).total_seconds())
-                    
-                    if time_diff < 15:
-                        kicker_name = entry.user.global_name or entry.user.name
-                        break
-            except Exception as e:
-                print(f"Ошибка чтения аудита: {e}")
-
-            if kicker_name:
-                break
+        await asyncio.sleep(1)
+        
+        try:
+            # Берем самую последнюю запись об отключении из ГС
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.member_disconnect):
+                now = discord.utils.utcnow()
+                time_diff = abs((now - entry.created_at).total_seconds())
+                
+                # Проверяем, что событие произошло в течение последней минуты
+                if time_diff < 60:
+                    kicker_name = entry.user.global_name or entry.user.name
+                else:
+                    error_reason = f"запись в аудите устарела ({int(time_diff)} сек назад)"
+        except discord.Forbidden:
+            error_reason = "нет права 'View Audit Log'"
+        except Exception as e:
+            error_reason = f"ошибка API: {e}"
 
         # Отправка сообщения в указанный чат
         target_channel = None
@@ -73,17 +75,15 @@ async def on_voice_state_update(member, before, after):
             target_channel = bot.get_channel(TEXT_CHANNEL_ID) or await bot.fetch_channel(TEXT_CHANNEL_ID)
         except Exception:
             target_channel = guild.system_channel
-            if not target_channel:
-                for ch in guild.text_channels:
-                    if ch.permissions_for(guild.me).send_messages:
-                        target_channel = ch
-                        break
 
         if target_channel:
             if kicker_name:
                 await target_channel.send(f"I got kicked by {kicker_name}")
             else:
-                await target_channel.send("I got disconnected")
+                msg = "I got disconnected"
+                if error_reason:
+                    msg += f" ({error_reason})"
+                await target_channel.send(msg)
 
 @bot.tree.command(name="join", description="Вернуть бота в голосовой канал")
 async def join(interaction: discord.Interaction):
