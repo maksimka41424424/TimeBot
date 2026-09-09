@@ -14,7 +14,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 VOICE_CHANNEL_ID = 1456040423926661296
 TEXT_CHANNEL_ID = 1456038468386947247
 
-# Переменная для защиты от повторных сообщений о кике
+# Защита от одновременных срабатываний
+kick_lock = asyncio.Lock()
 last_kick_time = 0
 
 @bot.event
@@ -44,46 +45,47 @@ async def on_voice_state_update(member, before, after):
     
     # Если из ГС выгнали именно нашего бота
     if member == bot.user and before.channel is not None and after.channel is None:
-        # Защита от дублирования: если прошло меньше 5 секунд с прошлого оповещения, игнорируем
-        now = time.time()
-        if now - last_kick_time < 5:
-            return
-        last_kick_time = now
+        async with kick_lock:
+            # Если с момента последнего сообщения прошло меньше 10 секунд — игнорируем
+            now = time.time()
+            if now - last_kick_time < 10:
+                return
+            last_kick_time = now
 
-        guild = before.channel.guild
-        
-        if guild.voice_client:
-            try:
-                await guild.voice_client.disconnect(force=True)
-            except Exception:
-                pass
-
-        kicker_name = None
-
-        if guild.me.guild_permissions.view_audit_log:
-            for _ in range(3):
-                await asyncio.sleep(1.0)
+            guild = before.channel.guild
+            
+            if guild.voice_client:
                 try:
-                    async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
-                        kicker_name = entry.user.global_name or entry.user.name
+                    await guild.voice_client.disconnect(force=True)
+                except Exception:
+                    pass
+
+            kicker_name = None
+
+            if guild.me.guild_permissions.view_audit_log:
+                for _ in range(3):
+                    await asyncio.sleep(1.0)
+                    try:
+                        async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
+                            kicker_name = entry.user.global_name or entry.user.name
+                            break
+                    except Exception as e:
+                        print(f"Ошибка аудита: {e}")
+
+                    if kicker_name:
                         break
-                except Exception as e:
-                    print(f"Ошибка аудита: {e}")
 
+            target_channel = None
+            try:
+                target_channel = bot.get_channel(TEXT_CHANNEL_ID) or await bot.fetch_channel(TEXT_CHANNEL_ID)
+            except Exception:
+                target_channel = guild.system_channel
+
+            if target_channel:
                 if kicker_name:
-                    break
-
-        target_channel = None
-        try:
-            target_channel = bot.get_channel(TEXT_CHANNEL_ID) or await bot.fetch_channel(TEXT_CHANNEL_ID)
-        except Exception:
-            target_channel = guild.system_channel
-
-        if target_channel:
-            if kicker_name:
-                await target_channel.send(f"I got kicked by {kicker_name}")
-            else:
-                await target_channel.send("I got disconnected")
+                    await target_channel.send(f"I got kicked by {kicker_name}")
+                else:
+                    await target_channel.send("I got disconnected")
 
 @bot.event
 async def on_message_delete(message):
@@ -91,7 +93,6 @@ async def on_message_delete(message):
     if message.author == bot.user and message.channel.id == TEXT_CHANNEL_ID:
         header = "⚠️ **Сообщение нельзя удалить!**\n"
         
-        # Если плашка уже есть в тексте, не добавляем ее повторно
         if message.content.startswith(header):
             content_to_send = message.content
         else:
