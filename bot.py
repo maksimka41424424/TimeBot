@@ -9,13 +9,15 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ID твоих каналов
 VOICE_CHANNEL_ID = 1456040423926661296
+TEXT_CHANNEL_ID = 1234567890123456789  # <--- ВСТАВЬ СЮДА ID СВОЕГО ТЕКСТОВОГО ЧАТА
 
 @bot.event
 async def on_ready():
     try:
         synced = await bot.tree.sync()
-        print(f"Успешно синхронизировано слэш-команд: {len(synced)}")
+        print(f"Синхронизировано слэш-команд: {len(synced)}")
     except Exception as e:
         print(f"Ошибка синхронизации: {e}")
 
@@ -25,40 +27,42 @@ async def on_ready():
     if channel and not bot.voice_clients:
         try:
             await channel.connect()
-            print(f"Подключился к: {channel.name}")
+            print(f"Подключился к ГС: {channel.name}")
         except Exception as e:
             print(f"Ошибка подключения: {e}")
 
-# Отслеживаем отключение из голосового канала
 @bot.event
 async def on_voice_state_update(member, before, after):
     # Проверяем, что отключили именно нашего бота
     if member == bot.user and before.channel is not None and after.channel is None:
         guild = before.channel.guild
-        kicker_name = "someone"
+        kicker_name = None
         
-        # Небольшая пауза, чтобы Discord успел записать событие в журнал аудита
-        await asyncio.sleep(0.5)
+        # Задержка 1 секунда, чтобы Discord успел записать событие
+        await asyncio.sleep(1)
         
         try:
-            # Ищем последнюю запись об отключении пользователя из голосового канала
-            async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
-                if entry.target == bot.user:
+            # Берем самое последнее запись отключения из голосового канала
+            async for entry in guild.audit_logs(limit=1, action=discord.AuditLogAction.member_disconnect):
+                # Сравниваем время записи с текущим временем
+                now = discord.utils.utcnow()
+                time_diff = (now - entry.created_at).total_seconds()
+                
+                # Если запись создана менее 5 секунд назад — это имя того, кто кикнул
+                if time_diff < 5:
                     kicker_name = entry.user.global_name or entry.user.name
                     break
+        except discord.Forbidden:
+            print("❌ Ошибка: Включи право 'Просмотр журнала аудита' у роли бота!")
         except Exception as e:
-            print(f"Не удалось прочитать журнал аудита: {e}")
+            print(f"Ошибка аудита: {e}")
 
-        # Находим текстовый канал для отправки сообщения (системный или первый доступный)
-        target_text_channel = guild.system_channel
-        if not target_text_channel:
-            for ch in guild.text_channels:
-                if ch.permissions_for(guild.me).send_messages:
-                    target_text_channel = ch
-                    break
-
-        if target_text_channel:
-            await target_text_channel.send(f"I got kicked by {kicker_name}")
+        text_channel = bot.get_channel(TEXT_CHANNEL_ID)
+        if text_channel:
+            if kicker_name:
+                await text_channel.send(f"I got kicked by {kicker_name}")
+            else:
+                await text_channel.send("I got disconnected")
 
 @bot.tree.command(name="join", description="Вернуть бота в голосовой канал")
 async def join(interaction: discord.Interaction):
