@@ -11,7 +11,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ID твоих каналов
 VOICE_CHANNEL_ID = 1456040423926661296
-TEXT_CHANNEL_ID = 1456038468386947247  # Указан твой текстовый канал
+TEXT_CHANNEL_ID = 1456038468386947247
 
 @bot.event
 async def on_ready():
@@ -23,7 +23,7 @@ async def on_ready():
 
     print(f"Бот {bot.user} успешно запущен!")
     
-    # Автоподключение к голосовому каналу при старте
+    # Автоподключение при старте
     try:
         channel = bot.get_channel(VOICE_CHANNEL_ID) or await bot.fetch_channel(VOICE_CHANNEL_ID)
         if channel:
@@ -37,7 +37,7 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Проверяем, что из ГС выгнали именно нашего бота
+    # Если из ГС выгнали именно нашего бота
     if member == bot.user and before.channel is not None and after.channel is None:
         guild = before.channel.guild
         
@@ -50,25 +50,24 @@ async def on_voice_state_update(member, before, after):
 
         kicker_name = None
         
-        # Даем Discord 1.5 секунды на запись события в Audit Log
-        await asyncio.sleep(1.5)
-        
-        try:
-            async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
-                now = discord.utils.utcnow()
-                # abs() защищает от рассинхронизации часов между Railway и Discord
-                time_diff = abs((now - entry.created_at).total_seconds())
-                
-                if time_diff < 20:  # Окно поиска 20 секунд
-                    kicker_name = entry.user.global_name or entry.user.name
-                    print(f"Нарушитель найден: {kicker_name} (разница: {time_diff:.1f} сек)")
-                    break
-        except discord.Forbidden:
-            print("❌ Ошибка: У роли бота нет права 'View Audit Log'!")
-        except Exception as e:
-            print(f"Ошибка чтения аудита: {e}")
+        # Быстрый поиск в аудите (5 попыток каждые 0.3 сек без лишних задержек)
+        for _ in range(5):
+            await asyncio.sleep(0.3)
+            try:
+                async for entry in guild.audit_logs(limit=3, action=discord.AuditLogAction.member_disconnect):
+                    now = discord.utils.utcnow()
+                    time_diff = abs((now - entry.created_at).total_seconds())
+                    
+                    if time_diff < 15:
+                        kicker_name = entry.user.global_name or entry.user.name
+                        break
+            except Exception as e:
+                print(f"Ошибка чтения аудита: {e}")
 
-        # Отправка сообщения в указанный текстовый канал
+            if kicker_name:
+                break
+
+        # Отправка сообщения в указанный чат
         target_channel = None
         try:
             target_channel = bot.get_channel(TEXT_CHANNEL_ID) or await bot.fetch_channel(TEXT_CHANNEL_ID)
