@@ -1,5 +1,6 @@
 import os
 import asyncio
+import time
 import discord
 from discord.ext import commands
 
@@ -12,6 +13,9 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # ID твоих каналов
 VOICE_CHANNEL_ID = 1456040423926661296
 TEXT_CHANNEL_ID = 1456038468386947247
+
+# Переменная для защиты от повторных сообщений о кике
+last_kick_time = 0
 
 @bot.event
 async def on_ready():
@@ -36,7 +40,16 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
+    global last_kick_time
+    
+    # Если из ГС выгнали именно нашего бота
     if member == bot.user and before.channel is not None and after.channel is None:
+        # Защита от дублирования: если прошло меньше 5 секунд с прошлого оповещения, игнорируем
+        now = time.time()
+        if now - last_kick_time < 5:
+            return
+        last_kick_time = now
+
         guild = before.channel.guild
         
         if guild.voice_client:
@@ -46,11 +59,8 @@ async def on_voice_state_update(member, before, after):
                 pass
 
         kicker_name = None
-        error_detail = ""
 
-        if not guild.me.guild_permissions.view_audit_log:
-            error_detail = "нет права 'View Audit Log' в настройках сервера"
-        else:
+        if guild.me.guild_permissions.view_audit_log:
             for _ in range(3):
                 await asyncio.sleep(1.0)
                 try:
@@ -58,7 +68,7 @@ async def on_voice_state_update(member, before, after):
                         kicker_name = entry.user.global_name or entry.user.name
                         break
                 except Exception as e:
-                    error_detail = f"ошибка: {e}"
+                    print(f"Ошибка аудита: {e}")
 
                 if kicker_name:
                     break
@@ -73,15 +83,21 @@ async def on_voice_state_update(member, before, after):
             if kicker_name:
                 await target_channel.send(f"I got kicked by {kicker_name}")
             else:
-                reason = f" ({error_detail})" if error_detail else " (запись в аудите не найдена)"
-                await target_channel.send(f"I got disconnected{reason}")
+                await target_channel.send("I got disconnected")
 
-# Переотправка сообщения, если его пытаются удалить
 @bot.event
 async def on_message_delete(message):
-    # Проверяем, что удалили сообщение именно этого бота и в нужном текстовом канале
+    # Защита от удаления сообщений бота
     if message.author == bot.user and message.channel.id == TEXT_CHANNEL_ID:
-        await message.channel.send(f"⚠️ **Сообщение нельзя удалить!**\n{message.content}")
+        header = "⚠️ **Сообщение нельзя удалить!**\n"
+        
+        # Если плашка уже есть в тексте, не добавляем ее повторно
+        if message.content.startswith(header):
+            content_to_send = message.content
+        else:
+            content_to_send = f"{header}{message.content}"
+            
+        await message.channel.send(content_to_send)
 
 @bot.tree.command(name="join", description="Вернуть бота в голосовой канал")
 async def join(interaction: discord.Interaction):
