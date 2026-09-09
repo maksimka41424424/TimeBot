@@ -9,6 +9,7 @@ intents.voice_states = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# ID твоих каналов
 VOICE_CHANNEL_ID = 1456040423926661296
 TEXT_CHANNEL_ID = 1456038468386947247
 
@@ -47,11 +48,9 @@ async def on_voice_state_update(member, before, after):
         kicker_name = None
         error_detail = ""
 
-        # Проверка прав бота на сервере
         if not guild.me.guild_permissions.view_audit_log:
             error_detail = "нет права 'View Audit Log' в настройках сервера"
         else:
-            # 3 попытки поиска записи в аудите с интервалом в 1 секунду
             for _ in range(3):
                 await asyncio.sleep(1.0)
                 try:
@@ -76,6 +75,13 @@ async def on_voice_state_update(member, before, after):
             else:
                 reason = f" ({error_detail})" if error_detail else " (запись в аудите не найдена)"
                 await target_channel.send(f"I got disconnected{reason}")
+
+# Переотправка сообщения, если его пытаются удалить
+@bot.event
+async def on_message_delete(message):
+    # Проверяем, что удалили сообщение именно этого бота и в нужном текстовом канале
+    if message.author == bot.user and message.channel.id == TEXT_CHANNEL_ID:
+        await message.channel.send(f"⚠️ **Сообщение нельзя удалить!**\n{message.content}")
 
 @bot.tree.command(name="join", description="Вернуть бота в голосовой канал")
 async def join(interaction: discord.Interaction):
