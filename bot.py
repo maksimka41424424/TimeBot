@@ -27,21 +27,18 @@ async def ensure_voice_connection():
     try:
         channel = bot.get_channel(VOICE_CHANNEL_ID) or await bot.fetch_channel(VOICE_CHANNEL_ID)
         if channel:
-            # Если бот вылетел из-за лага сети, возвращаем его без лишних событий
             if not channel.guild.voice_client or not channel.guild.voice_client.is_connected():
                 for vc in bot.voice_clients:
                     if vc.guild.id == channel.guild.id:
                         await vc.disconnect(force=True)
                 
-                # self_deaf=True предотвращает вылет от Discord за молчание в канале
                 await channel.connect(reconnect=True, timeout=60.0, self_deaf=True)
-                print(f"Канал {channel.name} успешно зафиксирован.")
+                print(f"Канал {channel.name} зафиксирован.")
     except Exception as e:
         print(f"Ошибка удержания канала: {e}")
 
 @tasks.loop(seconds=15)
 async def keep_alive_loop():
-    """Фоновая проверка раз в 15 секунд для предотвращения вылетов"""
     await ensure_voice_connection()
 
 @bot.event
@@ -62,35 +59,36 @@ async def on_ready():
 async def on_voice_state_update(member, before, after):
     global last_kick_time, is_kicked_by_user
     
-    # Реакция только при отключении бота
     if member == bot.user and before.channel is not None and after.channel is None:
         async with kick_lock:
             now_ts = time.time()
-            if now_ts - last_kick_time < 10:
+            if now_ts - last_kick_time < 5:
                 return
             last_kick_time = now_ts
 
             guild = before.channel.guild
             kicker_name = None
 
-            # Пауза для проверки логов Discord
-            await asyncio.sleep(1.5)
-
+            # Делаем 4 попытки проверки с паузой в 1 сек, давая Discord время записать кик
             if guild.me.guild_permissions.view_audit_log:
-                try:
-                    async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
-                        now = discord.utils.utcnow()
-                        time_diff = abs((now - entry.created_at).total_seconds())
-                        
-                        # Сообщение отправляется ТОЛЬКО если кикнул человек
-                        if time_diff <= 10:
-                            kicker_name = entry.user.global_name or entry.user.name
-                            break
-                except Exception as e:
-                    print(f"Ошибка аудита: {e}")
+                for _ in range(4):
+                    await asyncio.sleep(1.0)
+                    try:
+                        async for entry in guild.audit_logs(limit=5, action=discord.AuditLogAction.member_disconnect):
+                            now = discord.utils.utcnow()
+                            time_diff = abs((now - entry.created_at).total_seconds())
+                            
+                            if time_diff <= 15:
+                                kicker_name = entry.user.global_name or entry.user.name
+                                break
+                    except Exception as e:
+                        print(f"Ошибка аудита: {e}")
+
+                    if kicker_name:
+                        break
 
             if kicker_name:
-                is_kicked_by_user = True  # Человек кикнул бота: останавливаем удерживание до /join
+                is_kicked_by_user = True  # Фиксируем кик от человека, отменяем переподключение
                 if guild.voice_client:
                     try:
                         await guild.voice_client.disconnect(force=True)
@@ -101,7 +99,7 @@ async def on_voice_state_update(member, before, after):
                 if target_channel:
                     await target_channel.send(f"I got kicked by {kicker_name}")
             else:
-                # Если кика не было (мигнула сеть) — тихо восстанавливаем присутствие
+                # Записи нет — действительно выбила сеть
                 await ensure_voice_connection()
 
 @bot.event
@@ -122,7 +120,7 @@ async def join(interaction: discord.Interaction):
     await interaction.response.defer()
     
     try:
-        is_kicked_by_user = False  # Сбрасываем режим кика
+        is_kicked_by_user = False
         await ensure_voice_connection()
         await interaction.followup.send("Вернулся в голосовой канал! 👋")
     except Exception as e:
